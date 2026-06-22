@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acoustic Drone Detector</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #111722;
+    --grid: #1c2738;
+    --txt: #c8d6e5;
+    --dim: #5a6b82;
+    --ok: #2ee6a6;
+    --alert: #ff3b4e;
+    --mono: "SF Mono", "Consolas", "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font-family: var(--mono); padding: 24px; min-height: 100vh;
+  }
+  h1 { font-size: 18px; letter-spacing: 3px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 12px; letter-spacing: 1px; margin-bottom: 20px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--grid);
+    border-radius: 10px; padding: 18px; margin-bottom: 16px;
+  }
+  .label { color: var(--dim); font-size: 11px; letter-spacing: 2px; margin-bottom: 10px; text-transform: uppercase; }
+  canvas { width: 100%; height: 180px; display: block; border-radius: 6px; background: #060a10; image-rendering: pixelated; }
+  .bar-row { display: flex; align-items: center; margin: 8px 0; gap: 12px; }
+  .bar-name { width: 110px; font-size: 13px; }
+  .bar-track { flex: 1; height: 14px; background: var(--grid); border-radius: 7px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0; background: var(--ok); transition: width .12s linear; }
+  .bar-val { width: 48px; text-align: right; font-size: 13px; color: var(--dim); }
+  .status {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    font-size: 22px; letter-spacing: 4px; font-weight: 700; padding: 22px;
+    border-radius: 10px; border: 1px solid var(--grid); background: var(--panel);
+    transition: background .2s, border-color .2s, color .2s;
+  }
+  .status.clear { color: var(--ok); }
+  .status.alert { color: #fff; background: rgba(255,59,78,.14); border-color: var(--alert); animation: pulse 1s infinite; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: currentColor; box-shadow: 0 0 14px currentColor; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  .conn { font-size: 11px; color: var(--dim); text-align: right; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>◢ ACOUSTIC DRONE DETECTOR</h1>
+  <div class="sub">пассивный детектор по звуку · реальное время</div>
+
+  <div id="status" class="status clear"><span class="dot"></span><span id="statusText">ЧИСТО</span></div>
+
+  <div class="panel">
+    <div class="label">Спектрограмма (лог-мел, последняя секунда)</div>
+    <canvas id="spec" width="88" height="64"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="label">Вероятности классов</div>
+    <div id="bars"></div>
+    <div class="conn" id="conn">подключение…</div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById("spec");
+const ctx = cv.getContext("2d");
+const barsEl = document.getElementById("bars");
+const statusEl = document.getElementById("status");
+const statusText = document.getElementById("statusText");
+const connEl = document.getElementById("conn");
+let bars = {};
+
+// Цвет ячейки спектрограммы: 0 -> тёмный, 1 -> циан/зелёный
+function color(v) {
+  const r = Math.floor(20 * v);
+  const g = Math.floor(40 + 190 * v);
+  const b = Math.floor(80 + 110 * v);
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawMel(mel) {
+  if (!mel || !mel.length) return;
+  const nMels = mel.length, nFrames = mel[0].length;
+  cv.width = nFrames; cv.height = nMels;
+  const img = ctx.createImageData(nFrames, nMels);
+  for (let m = 0; m < nMels; m++) {
+    for (let f = 0; f < nFrames; f++) {
+      const v = mel[nMels - 1 - m][f];           // низкие частоты снизу
+      const r = 20 * v, g = 40 + 190 * v, b = 80 + 110 * v;
+      const idx = (m * nFrames + f) * 4;
+      img.data[idx] = r; img.data[idx+1] = g; img.data[idx+2] = b; img.data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function buildBars(classes) {
+  barsEl.innerHTML = "";
+  bars = {};
+  classes.forEach(c => {
+    const row = document.createElement("div"); row.className = "bar-row";
+    row.innerHTML = `<div class="bar-name">${c}</div>
+      <div class="bar-track"><div class="bar-fill"></div></div>
+      <div class="bar-val">0%</div>`;
+    barsEl.appendChild(row);
+    bars[c] = { fill: row.querySelector(".bar-fill"), val: row.querySelector(".bar-val") };
+  });
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => connEl.textContent = "● подключено";
+  ws.onclose = () => { connEl.textContent = "○ переподключение…"; setTimeout(connect, 1000); };
+  ws.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (Object.keys(bars).length !== d.classes.length) buildBars(d.classes);
+    d.classes.forEach((c, i) => {
+      const p = d.probs[i];
+      bars[c].fill.style.width = (p * 100).toFixed(0) + "%";
+      bars[c].fill.style.background = (c.toLowerCase().includes("background") ? "#3a4a63" : "var(--ok)");
+      bars[c].val.textContent = (p * 100).toFixed(0) + "%";
+    });
+    drawMel(d.mel);
+    const alert = d.drone_p >= d.threshold;
+    statusEl.className = "status " + (alert ? "alert" : "clear");
+    statusText.textContent = alert
+      ? `ДРОН  ${(d.drone_p*100).toFixed(0)}%`
+      : "ЧИСТО";
+  };
+}
+connect();
+</script>
+</body>
+</html>
