@@ -8,6 +8,14 @@
 эфир и поднимает тревогу. Никакого глушения, перехвата или воздействия на
 дрон — чистая задача распознавания сигнала (DSP + ML).
 
+Проект состоит из двух модальностей, которые вместе образуют мини-систему
+**sensor fusion**:
+- 🎤 **акустический детектор** (звук моторов → CNN) — основной;
+- 📷 **видеодетектор на YOLO** (визуальный близнец, см. `video/`).
+
+Плюс честная оценка качества (`evaluate.py`) и деплой на Raspberry Pi
+(`deploy/`).
+
 ## Почему звук
 
 Дальнобойные дроны, которые долетают до тыловых городов, часто «молчат» в
@@ -17,7 +25,7 @@
 
 ## Стек
 
-Python · PyTorch · librosa · sounddevice · soundfile
+Python · PyTorch · librosa · sounddevice · FastAPI · scikit-learn · Ultralytics YOLO · OpenCV
 
 ## Установка
 
@@ -40,6 +48,7 @@ pip install -r requirements.txt
 cd src
 python make_synthetic_data.py   # генерит data/drone и data/background
 python train.py                 # обучает CNN, сохраняет models/drone_cnn.pt
+python evaluate.py              # метрики на отложенном test-наборе
 python detect.py                # слушает микрофон в реальном времени
 ```
 
@@ -92,6 +101,55 @@ python record.py background 5 15    # фоновые записи
 
 Затем снова `python train.py` и `python detect.py`.
 
+## Метрики (честная оценка)
+
+`train.py` откладывает **test-набор**, который не участвует в обучении.
+`evaluate.py` считает на нём качество и сохраняет в `reports/`:
+
+- `metrics.json` — accuracy, ROC-AUC, матрица ошибок;
+- `confusion_matrix.png` — матрица ошибок;
+- `roc_curve.png` — ROC-кривая (дрон vs фон).
+
+```bash
+python evaluate.py
+```
+
+```
+=== Classification report (test) ===
+              precision    recall  f1-score   support
+  background     0.94       0.96      0.95        ...
+       drone     0.96       0.93      0.95        ...
+ROC-AUC (дрон vs фон): 0.97
+```
+
+> На синтетике цифры близки к 1.0 (она тривиально разделима). Настоящие,
+> «честные» числа появятся на реальном датасете — именно их и стоит
+> показывать.
+
+## Видеодетектор (визуальный близнец) 📷
+
+В папке `video/` — детектор дронов **по изображению** на YOLO. Вместе с
+акустикой это пара «звук + зрение».
+
+```bash
+pip install -r requirements-video.txt
+cd video
+# обучение на датасете дронов (например с Roboflow Universe):
+python train_video.py --data path/to/data.yaml --epochs 50
+# детекция с камеры или из видео:
+python detect_video.py --weights ../models/yolo_drone.pt
+python detect_video.py --source clip.mp4
+```
+
+Без своих весов запустится предобученная YOLOv8n (COCO) — только для
+проверки пайплайна, класса `drone` она не знает.
+
+## Деплой на Raspberry Pi 🍓
+
+Автономный пост «слушает небо 24/7» на Pi + USB-микрофон. Полная инструкция:
+[`deploy/DEPLOY.md`](deploy/DEPLOY.md) (установка, автозапуск через systemd,
+идеи: GPIO-buzzer, Telegram-уведомления, триангуляция несколькими Pi).
+
 ## Как это устроено
 
 ```
@@ -107,15 +165,21 @@ python record.py background 5 15    # фоновые записи
 | `dataset.py`            | загрузка data/, нарезка на окна              |
 | `make_synthetic_data.py`| генератор синтетики для проверки пайплайна   |
 | `record.py`             | сбор реального датасета с микрофона          |
-| `train.py`              | обучение + сохранение модели                 |
+| `train.py`              | обучение + train/val/test сплит              |
+| `evaluate.py`           | метрики на test (confusion matrix, ROC, F1)  |
 | `detect.py`             | детекция в реальном времени (терминал)       |
 | `smoothing.py`          | сглаживание вероятностей во времени          |
 | `webapp.py` + `static/` | веб-дашборд (FastAPI + WebSocket)            |
+| `video/`                | видеодетектор на YOLO (обучение + инференс)  |
+| `deploy/`               | systemd-сервис и гайд по Raspberry Pi        |
 
 ## Куда развивать
 
 - ✅ **Сглаживание во времени** — реализовано (`smoothing.py`).
 - ✅ **Веб-дашборд** — реализован (`webapp.py` + живая спектрограмма).
+- ✅ **Метрики** — реализованы (`evaluate.py`, отчёты в `reports/`).
+- ✅ **Видеодетектор (YOLO)** — реализован (`video/`).
+- ✅ **Деплой на Raspberry Pi** — описан (`deploy/`).
 - **Несколько микрофонов + триангуляция** → не только «есть дрон», но и направление.
 - **Тип дрона** по спектру (доп. классы вроде `drone_fpv`, `drone_shahed`).
 - **Аугментация данных** (сдвиги, шум, реверберация) для устойчивости.

@@ -5,7 +5,7 @@ import glob
 import librosa
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, random_split
 
 import config
 from features import wav_to_logmel
@@ -45,6 +45,9 @@ class AudioFolderDataset(Dataset):
                 for k in range(n_windows):
                     self.index.append((f, k * config.SAMPLES_PER_CLIP, label))
 
+        # детерминированный порядок -> воспроизводимые train/val/test сплиты
+        self.index.sort()
+
     def __len__(self):
         return len(self.index)
 
@@ -58,3 +61,17 @@ class AudioFolderDataset(Dataset):
         feat = wav_to_logmel(y)
         x = torch.from_numpy(feat).unsqueeze(0)  # (1, N_MELS, frames)
         return x, label
+
+
+def split_dataset(ds, fractions=(0.7, 0.15, 0.15), seed: int = 0):
+    """Детерминированный train/val/test сплит (один и тот же в train.py и
+    evaluate.py при одинаковом seed), чтобы метрики считались на честном
+    отложенном test-наборе."""
+    n = len(ds)
+    n_train = int(n * fractions[0])
+    n_val = int(n * fractions[1])
+    n_test = n - n_train - n_val
+    return random_split(
+        ds, [n_train, n_val, n_test],
+        generator=torch.Generator().manual_seed(seed),
+    )

@@ -1,0 +1,15 @@
+[Unit]
+Description=Acoustic Drone Detector (web dashboard)
+After=network.target sound.target
+
+[Service]
+Type=simple
+# поправь User и пути под свою систему
+User=pi
+WorkingDirectory=/home/pi/drone-acoustic-detector/src
+ExecStart=/home/pi/drone-acoustic-detector/.venv/bin/python webapp.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -7,16 +7,17 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 
 import config
-from dataset import AudioFolderDataset, discover_classes
+from dataset import AudioFolderDataset, discover_classes, split_dataset
 from model import DroneCNN
 
 EPOCHS = 15
 BATCH_SIZE = 16
 LR = 1e-3
-VAL_FRACTION = 0.2
+SPLIT = (0.7, 0.15, 0.15)   # train / val / test
+SPLIT_SEED = 0              # тот же seed в evaluate.py
 
 
 def main():
@@ -30,14 +31,13 @@ def main():
     print(f"Классы: {classes}  |  устройство: {device}")
 
     ds = AudioFolderDataset(config.DATA_DIR, classes)
-    if len(ds) < 4:
+    if len(ds) < 6:
         raise SystemExit("Слишком мало данных. Добавь аудио в data/.")
 
-    n_val = max(1, int(len(ds) * VAL_FRACTION))
-    n_train = len(ds) - n_val
-    train_ds, val_ds = random_split(
-        ds, [n_train, n_val], generator=torch.Generator().manual_seed(0)
-    )
+    train_ds, val_ds, test_ds = split_dataset(ds, SPLIT, SPLIT_SEED)
+    n_train, n_val = len(train_ds), len(val_ds)
+    print(f"Сэмплов: train={n_train}  val={n_val}  test={len(test_ds)} "
+          f"(test отложен для evaluate.py)")
     train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=BATCH_SIZE)
 
@@ -74,12 +74,17 @@ def main():
         if acc >= best_acc:
             best_acc = acc
             torch.save(
-                {"state_dict": model.state_dict(), "classes": classes},
+                {
+                    "state_dict": model.state_dict(),
+                    "classes": classes,
+                    "split": SPLIT,
+                    "split_seed": SPLIT_SEED,
+                },
                 config.MODEL_PATH,
             )
 
     print(f"\nЛучшая val_acc={best_acc:.3f}. Модель: {config.MODEL_PATH}")
-    print("Теперь запусти детектор:  python detect.py")
+    print("Дальше:  python evaluate.py  (метрики на test)  |  python detect.py")
 
 
 if __name__ == "__main__":
